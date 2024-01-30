@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Azure DevOps Work Items</title>
+</head>
+
+<body>
+    <!-- <h1>Users with Less Than 3 Work Items In Progress of Type 'Issue'</h1> -->
+    <h1>State Wise Work Items Summary</h1>
+    <div id="result"></div>
+
+    <script>
+        document.addEventListener("DOMContentLoaded", function () {
+
+            const pat = 'pqmuuot3vlnwcpl4nynf4mqnduzgsydayvm33mpydfeefgkzonyq';
+            const orgName = 'EMEASupport';
+            const projectName = 'FirstLineSupport';
+
+            // WIQL (Work Item Query Language) query to get work items in 'In Progress' state of type 'Issue' for a specific project
+            const wiqlQuery = `SELECT [System.Id]
+                                FROM workitems
+                                WHERE [System.State] = 'New'
+                                AND [System.AssignedTo] = ''
+                                AND [System.TeamProject] = 'FirstLineSupport'
+                            `;
+
+            // Azure DevOps REST API URL
+            var apiUrl = `https://dev.azure.com/${orgName}/${projectName}/_apis/wit/wiql?api-version=7.1-preview.2`;
+
+            // Fetch data using Azure DevOps REST API
+            fetch(apiUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Basic ' + btoa(':' + pat)
+                },
+                body: JSON.stringify({
+                    query: wiqlQuery
+                })
+            })
+                .then(response => response.json())
+                .then(data => {
+                    // Process the result
+                    var workItemIds = data.workItems.map(item => item.id);
+
+                    console.log(workItemIds);
+                    console.log(workItemIds.length);
+
+                    if (workItemIds.length > 0) {
+                        checkUserWithLeastWorkItems(workItemIds[0]);
+                    }
+                    else {
+                        console.log("No Work Items to assign");
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                });
+
+            async function checkUserWithLeastWorkItems(workItemIdToAssign) {
+
+                var apiUrl = "https://dev.azure.com/EMEASupport/FirstLineSupport/_apis/wit/wiql?api-version=7.1";
+
+                // WIQL (Work Item Query Language) query to get work items in 'In Progress' state of type 'Issue' for a specific project
+                var wiqlQuery = `
+                                SELECT [System.Id]
+                                FROM workitems
+                                WHERE [System.State] in ('New','In Progress')
+                                AND [System.WorkItemType] = 'Issue'
+                                AND [System.TeamProject] = 'FirstLineSupport'
+                            `;
+
+                fetch(apiUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Basic ' + btoa(':' + pat)
+                    },
+                    body: JSON.stringify({
+                        query: wiqlQuery
+                    })
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        // Process the result
+                        var workItemIds = data.workItems.map(item => item.id);
+                        var userCountMap = {};
+
+                        // Specify the list of users to check
+                        var usersToCheck = ['Sasikiran CHAGANTI', 'Chandrashekar PABBOJU', 'Nitesh SHAW'];
+
+                        // Initialize count for all users to zero
+                        usersToCheck.forEach(user => {
+                            userCountMap[user] = 0;
+                        });
+
+                        // Fetch detailed work item information for each work item
+                        Promise.all(workItemIds.map(workItemId =>
+                            fetch(`https://dev.azure.com/EMEASupport/FirstLineSupport/_apis/wit/workitems/${workItemId}?api-version=7.1`, {
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'Authorization': 'Basic ' + btoa(':' + pat)
+                                }
+                            })
+                                .then(response => response.json())
+                                .then(workItemData => {
+                                    var assignedTo = workItemData.fields && workItemData.fields['System.AssignedTo'];
+
+                                    // Check if AssignedTo is an object with a 'displayName' property
+                                    if (assignedTo && typeof assignedTo === 'object' && assignedTo.displayName) {
+                                        assignedTo = assignedTo.displayName;
+                                    }
+
+                                    if (assignedTo) {
+                                        // Increment count for the user
+                                        userCountMap[assignedTo] = (userCountMap[assignedTo] || 0) + 1;
+                                    }
+                                })
+                        ))
+                            .then(() => {
+                                // Log user-wise count to the console
+                                // console.log("User-wise Work Item Count:");
+                                for (var user in userCountMap) {
+                                    console.log(`${user}: ${userCountMap[user]}`);
+                                }
+
+                                // Identify users with less than 3 work items
+                                var lessThanThreeUsers = Object.keys(userCountMap).filter(user => userCountMap[user] < 3);
+
+                                // Find the user with the least count among those with less than 3 work items
+                                var userWithLeastWorkItems = lessThanThreeUsers.reduce((minUser, user) => {
+                                    return userCountMap[user] < userCountMap[minUser] ? user : minUser;
+                                }, lessThanThreeUsers[0]);
+
+                                // console.log(userWithLeastWorkItems);
+                                assignWorkItem(workItemIdToAssign, userWithLeastWorkItems);
+                            })
+                    })
+            }
+
+            async function assignWorkItem(workItemIdToAssign, assigneeToAssign) {
+
+                console.log("Assigning Work Item ", workItemIdToAssign, "to user ", assigneeToAssign);
+
+                const url = `https://dev.azure.com/${orgName}/${projectName}/_apis/wit/workitems/${workItemIdToAssign}?api-version=7.1`;
+
+                const headers = {
+                    'Content-Type': 'application/json-patch+json',
+                    'Authorization': `Basic ${btoa(`:${pat}`)}`
+                };
+
+                const body = [
+                    {
+                        "op": "add",
+                        "path": "/fields/System.AssignedTo",
+                        "value": assigneeToAssign
+                    }
+                ];
+
+                try {
+                    const response = await fetch(url, {
+                        method: 'PATCH',
+                        headers: headers,
+                        body: JSON.stringify(body)
+                    });
+
+                    if (response.ok) {
+                        console.log("Work item " + workItemIdToAssign + " assigned successfully to " + assigneeToAssign + "!");
+                    } else {
+                        const errorData = await response.json();
+                        console.log(`Error: ${errorData.message}`);
+                    }
+                } catch (error) {
+                    console.error('Error:', error);
+                }
+            }
+
+        });
+    </script>
+</body>
+
+</html>
